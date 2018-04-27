@@ -232,7 +232,15 @@ class EnterpriseGatewayApp(KernelGatewayApp):
                     self.prespawn_count, self.max_kernels)
                 )
 
-        api_module = self._load_api_module(self.api)
+        # FIXME - there's probably a more elegant way to do this, look into it
+        # If the default JKG personality is in place, switch to ours.  This cannot be done by setting
+        # the member variable, else the @observe trait in JKG will be triggered.  Since there isn't a
+        # way to change personalities once started, its not clear why that member is getting observed
+        # in the first place.
+        if self.api == 'kernel_gateway.jupyter_websocket':
+            api_module = self._load_api_module('enterprise_gateway.jupyter_enterprise_websocket')
+        else:
+            api_module = self._load_api_module(self.api)
         func = getattr(api_module, 'create_personality')
         self.personality = func(parent=self, log=self.log)
 

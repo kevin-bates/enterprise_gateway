@@ -27,7 +27,9 @@ Jupyter Notebooks to share resources across an Apache Spark cluster.
     keywords=['Interactive', 'Interpreter', 'Kernel', 'Web', 'Cloud'],
     packages=[
         'enterprise_gateway',
+        'enterprise_gateway.jupyter_enterprise_websocket',
         'enterprise_gateway.services',
+        'enterprise_gateway.services.admin',
         'enterprise_gateway.services.kernels',
         'enterprise_gateway.services.kernelspecs',
         'enterprise_gateway.services.processproxies',

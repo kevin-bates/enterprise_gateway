@@ -78,6 +78,16 @@ class RemoteMappingKernelManager(SeedingMappingKernelManager):
             func()
         return True
 
+    def kernel_model(self, kernel_id):
+        # Get the model and add username to it.
+        model = super(RemoteMappingKernelManager, self).kernel_model(kernel_id)
+
+        # Fixme - this requires PR 306 and additional changes tot he session manager - that we'll do
+        # later.  For now, just show we can extend the model with a place-holder username.
+        model['user_name'] = 'place_holder_user'
+
+        return model
+
     def new_kernel_id(self, **kwargs):
         """Override used to provide a mechanism by which clients can specify a kernel's id.  In this case
            that mechanism is via the per-kernel environment variable: KERNEL_ID.  If specified, its value
