@@ -13,6 +13,11 @@ import threading
 kernels_lock = threading.Lock()
 kernel_session_location = os.getenv('EG_KERNEL_SESSION_LOCATION', jupyter_data_dir())
 
+# FIXME - should be formally defined once/if Provisioned Kernels is ratified
+# Should also support kernelspec overrides?
+provisioned_kernel_names = os.getenv('EG_PROVISIONED_KERNEL_NAMES', '').split(',')
+provisioned_kernel_count = int(os.getenv('EG_PROVISIONED_KERNEL_COUNT', '0'))
+provisioned_kernel_username = os.getenv('EG_PROVISIONED_KERNEL_USERNAME', 'generic')
 
 class KernelSessionManager(LoggingConfigurable):
     """
@@ -35,11 +40,12 @@ class KernelSessionManager(LoggingConfigurable):
         self.kernel_manager = kernel_manager
         self._sessions = dict()
         self._sessionsByUser = dict()
+        self._provisioned_sessions = dict()
         if self.enable_persistence:
             self.kernel_session_file = os.path.join(self._get_sessions_loc(), 'kernels.json')
             self._load_sessions()
 
-    def create_session(self, kernel_id, **kwargs):
+    def create_session(self, kernel_id, provisioned=False, **kwargs):
         """
             Creates a session associated with this kernel.  User and KernelName, along with connection information
             are tracked and saved to persistent store.
@@ -49,6 +55,7 @@ class KernelSessionManager(LoggingConfigurable):
         # Compose the kernel_session entry
         kernel_session = dict()
         kernel_session['kernel_id'] = kernel_id
+        kernel_session['provisioned'] = provisioned
         kernel_session['username'] = self._get_kernel_username(kwargs.get('env',{}))
         kernel_session['kernel_name'] = km.kernel_name
 
@@ -73,6 +80,28 @@ class KernelSessionManager(LoggingConfigurable):
         kernel_session['process_info'] = km.process_proxy.get_process_info() if km.process_proxy else {}
         self._save_session(kernel_id, kernel_session)
 
+    def get_provisioned_session(self, **kwargs):
+        # Using kernel_name, check set of provisioned_sessions.  If available, add the session
+        # into the kernel manager map and return the kernel_id
+
+        kernel_id = None
+        kernels_lock.acquire()
+        try:
+            kernel_name = kwargs['kernel_name']
+            if kernel_name in self._provisioned_sessions and len(self._provisioned_sessions[kernel_name]) > 0:
+                kernel_id = self._provisioned_sessions[kernel_name].pop(0)
+        finally:
+            kernels_lock.release()
+
+        if kernel_id:  # Start from session
+            if not self._start_session(self._sessions[kernel_id]):
+                # if we can't start from persisted state, delete this session and return None
+                if self.enable_persistence:
+                    self._delete_sessions([kernel_id])
+                kernel_id = None
+
+        return kernel_id
+
     def _save_session(self, kernel_id, kernel_session):
         # Write/commit the addition, update dictionary
         kernels_lock.acquire()
@@ -86,6 +115,16 @@ class KernelSessionManager(LoggingConfigurable):
                 # Only append if not there yet (e.g. restarts will be there already)
                 if kernel_id not in self._sessionsByUser[username]:
                     self._sessionsByUser[username].append(kernel_id)
+
+            kernel_name = kernel_session['kernel_name']
+            if kernel_session['provisioned']:  # Add to provisioned sessions
+                if kernel_name not in self._provisioned_sessions:
+                    self._provisioned_sessions[kernel_name] = []
+                self._provisioned_sessions[kernel_name].append(kernel_id)
+            else:  # check if this had been provisioned previously. If so, remove it - shouldn't be necessary
+                if kernel_name in self._provisioned_sessions and kernel_id in self._provisioned_sessions[kernel_name]:
+                    self._provisioned_sessions[kernel_name].remove(kernel_id)
+
             self._commit_sessions()  # persist changes
         finally:
             kernels_lock.release()
@@ -101,7 +140,8 @@ class KernelSessionManager(LoggingConfigurable):
 
     def start_sessions(self):
         """
-            Attempt to start persisted sessions.  Track and delete the restart attempts that failed...
+            Attempt to start persisted sessions.  Track and delete the restart attempts that failed.
+            If provisioned kernels are desired, start those.
         """
         if self.enable_persistence:
             sessions_to_remove = []
@@ -117,9 +157,24 @@ class KernelSessionManager(LoggingConfigurable):
 
             self._delete_sessions(sessions_to_remove)
 
+        # Determine if provisioned kernels should be created
+        if len(provisioned_kernel_names) > 0 and provisioned_kernel_count > 0:
+            kwargs = dict()
+            kwargs['env'] = {'KERNEL_USERNAME':provisioned_kernel_username}
+
+            for pkn in provisioned_kernel_names:
+                for i in range(provisioned_kernel_count):
+                    self.kernel_manager.provision_kernel(kernel_name=pkn, **kwargs)
+
     def _start_session(self, kernel_session):
         # Attempt to start kernel from persisted state.  if started, record kernel_session in dictionary
         # else delete session
+
+        # FIXME - what to do about starting provisioned sessions?  Seems like these should be attempted as well.
+        #  If so, then the provisioning in start_sessions() needs to be aware that some provisioned kernels
+        #  could already exist (so we don't start more than we should).  In addition, it should NOT attempt to
+        #  start persisted provisioned kernels if the provisioning of those kernels is no longer applicable to
+        #  the current startup context.  Both kernel types and their counts may have been changed between starts.
         kernel_id = kernel_session['kernel_id']
         kernel_started = self.kernel_manager.start_kernel_from_session(kernel_id=kernel_id,
                                                                 kernel_name=kernel_session['kernel_name'],
@@ -133,12 +188,15 @@ class KernelSessionManager(LoggingConfigurable):
 
     def delete_session(self, kernel_id):
         """
-            Removes saved session associated with kernel_id from dictionary and persisted store
+            Removes saved session associated with kernel_id from dictionary and persisted store.
+            If session is pre-spawned, it will be skipped since only assocaited sessions can
+            be deleted.
         """
-        self._delete_sessions([kernel_id])
+        if not self._provisioned_session(kernel_id):
+            self._delete_sessions([kernel_id])
 
-        if self.enable_persistence:
-            self.log.info("Deleted persisted kernel session for id: %s" % kernel_id)
+            if self.enable_persistence:
+                self.log.info("Deleted persisted kernel session for id: %s" % kernel_id)
 
     def _delete_sessions(self, kernel_ids):
         # Remove unstarted sessions and rewrite
@@ -162,6 +220,12 @@ class KernelSessionManager(LoggingConfigurable):
             with open(self.kernel_session_file, 'w') as fp:
                 json.dump(self._sessions, fp)
                 fp.close()
+
+    def _provisioned_session(self, kernel_id):
+        kernel_session = self._sessions[kernel_id]
+        if kernel_session and kernel_session['provisioned']:
+            return True
+        return False
 
     def _get_sessions_loc(self):
         path = os.path.join(kernel_session_location, 'sessions')

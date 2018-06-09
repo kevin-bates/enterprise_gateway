@@ -10,7 +10,8 @@ import uuid
 from ipython_genutils.importstring import import_item
 from kernel_gateway.services.kernels.manager import SeedingMappingKernelManager, KernelGatewayIOLoopKernelManager
 from ..processproxies.processproxy import LocalProcessProxy, RemoteProcessProxy
-from tornado import gen
+from functools import partial
+from tornado import gen, ioloop
 from ipython_genutils.py3compat import (bytes_to_str, str_to_bytes, unicode_type)
 
 
@@ -25,10 +26,25 @@ class RemoteMappingKernelManager(SeedingMappingKernelManager):
 
     @gen.coroutine
     def start_kernel(self, *args, **kwargs):
-        self.log.debug("RemoteMappingKernelManager.start_kernel: {}".format(kwargs['kernel_name']))
-        kernel_id = yield gen.maybe_future(super(RemoteMappingKernelManager, self).start_kernel(*args, **kwargs))
-        self.parent.kernel_session_manager.create_session(kernel_id, **kwargs)
+        # Check if this kernel has provisioned instances, if so, load from that, else, fall through.
+        kernel_id = self.parent.kernel_session_manager.get_provisioned_session(**kwargs)
+        if kernel_id:  # replace this session with another provisioned session.
+            self.log.debug("RemoteMappingKernelManager.start_kernel: {} - using provisioned kernel!".format(kwargs['kernel_name']))
+            #self.provision_kernel(*args, **kwargs)
+            pass
+        else:  # Perform traditional startup
+            self.log.debug("RemoteMappingKernelManager.start_kernel: {}".format(kwargs['kernel_name']))
+            kernel_id = yield gen.maybe_future(super(RemoteMappingKernelManager, self).start_kernel(*args, **kwargs))
+        self.parent.kernel_session_manager.create_session(kernel_id, provisioned=False, **kwargs)
         raise gen.Return(kernel_id)
+
+    def provision_kernel(self, *args, **kwargs):
+        self.log.debug("RemoteMappingKernelManager.provision_kernel: {}".format(kwargs['kernel_name']))
+        # Run kernel startup synchronously...
+        start = partial(super(RemoteMappingKernelManager, self).start_kernel, *args, **kwargs)
+        kernel_id = ioloop.IOLoop.current().run_sync(start)
+
+        self.parent.kernel_session_manager.create_session(kernel_id, provisioned=True, **kwargs)
 
     def remove_kernel(self, kernel_id):
         super(RemoteMappingKernelManager, self).remove_kernel(kernel_id)
@@ -41,41 +57,49 @@ class RemoteMappingKernelManager(SeedingMappingKernelManager):
         if self.kernel_spec_manager:
             constructor_kwargs['kernel_spec_manager'] = self.kernel_spec_manager
 
-        # Construct a kernel manager...
-        km = self.kernel_manager_factory(connection_file=os.path.join(
-            self.connection_dir, "kernel-%s.json" % kernel_id),
-            parent=self, log=self.log, kernel_name=kernel_name,
-            **constructor_kwargs)
+        # Before constructing a new kernel manager, check if there's one already present.  This will be true
+        # for provisioned sessions anyway.  Since get_kernel() raises exceptions on not found, we first check
+        # if kernel id is present in the map.
+        if kernel_id in self:
+            km = self.get_kernel(kernel_id)  # already present, we're done.
 
-        # Load connection info into member vars - no need to write out connection file
-        km.load_connection_info(connection_info)
+            # Perform injection here, if necessary..
+            # km.process_proxy.inject()..
+        else:  # Construct a kernel manager...
+            km = self.kernel_manager_factory(connection_file=os.path.join(
+                self.connection_dir, "kernel-%s.json" % kernel_id),
+                parent=self, log=self.log, kernel_name=kernel_name,
+                **constructor_kwargs)
 
-        km._launch_args = launch_args
+            # Load connection info into member vars - no need to write out connection file
+            km.load_connection_info(connection_info)
 
-        # Construct a process-proxy
-        if km.kernel_spec.process_proxy_class:
-            process_proxy_class = import_item(km.kernel_spec.process_proxy_class)
-            km.process_proxy = process_proxy_class(km, proxy_config=km.kernel_spec.process_proxy_config)
-            km.process_proxy.load_process_info(process_info)
+            km._launch_args = launch_args
 
-            # Confirm we can even poll the process.  If not, remove the persisted session.
-            if km.process_proxy.poll() is False:
-                return False
+            # Construct a process-proxy
+            if km.kernel_spec.process_proxy_class:
+                process_proxy_class = import_item(km.kernel_spec.process_proxy_class)
+                km.process_proxy = process_proxy_class(km, proxy_config=km.kernel_spec.process_proxy_config)
+                km.process_proxy.load_process_info(process_info)
 
-        km.kernel = km.process_proxy
-        km.start_restarter()
-        km._connect_control_socket()
-        self._kernels[kernel_id] = km
-        self._kernel_connections[kernel_id] = 0
-        self.start_watching_activity(kernel_id)
-        self.add_restart_callback(kernel_id,
-            lambda: self._handle_kernel_died(kernel_id),
-            'dead',
-        )
-        # Only initialize culling if available.  Warning message will be issued in gatewayapp at startup.
-        func = getattr(self, 'initialize_culler', None)
-        if func:
-            func()
+                # Confirm we can even poll the process.  If not, remove the persisted session.
+                if km.process_proxy.poll() is False:
+                    return False
+
+            km.kernel = km.process_proxy
+            km.start_restarter()
+            km._connect_control_socket()
+            self._kernels[kernel_id] = km
+            self._kernel_connections[kernel_id] = 0
+            self.start_watching_activity(kernel_id)
+            self.add_restart_callback(kernel_id,
+                lambda: self._handle_kernel_died(kernel_id),
+                'dead',
+            )
+            # Only initialize culling if available.  Warning message will be issued in gatewayapp at startup.
+            func = getattr(self, 'initialize_culler', None)
+            if func:
+                func()
         return True
 
     def new_kernel_id(self, **kwargs):
