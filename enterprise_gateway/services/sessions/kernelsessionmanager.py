@@ -1,6 +1,5 @@
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
-"""Session manager that keeps all its metadata in memory."""
 
 import copy
 import getpass
@@ -10,15 +9,25 @@ import threading
 
 from ipython_genutils.py3compat import (bytes_to_str, str_to_bytes)
 from jupyter_core.paths import jupyter_data_dir
-from traitlets import Bool, default
+from notebook.services.contents.manager import ContentsManager
+from notebook.services.contents.filemanager import FileContentsManager
+from traitlets import Type, Bool, default
 from traitlets.config.configurable import LoggingConfigurable
 
+KERNEL_SESSIONS_DIR_NAME = "kernel_sessions"
+KERNEL_SESSIONS_PATH_NAME = KERNEL_SESSIONS_DIR_NAME + "/sessions.json"
+CM_DIRECTORY = 'directory'
+CM_FILE = 'file'
+CM_FORMAT_TEXT = 'text'
+CM_FORMAT_JSON = 'json'
+
 kernels_lock = threading.Lock()
-kernel_session_location = os.getenv('EG_KERNEL_SESSION_LOCATION', jupyter_data_dir())
+
+kernel_session_root = os.getenv('EG_KERNEL_SESSION_LOCATION', jupyter_data_dir())
 
 
 class KernelSessionManager(LoggingConfigurable):
-    """KernelSessionManager is persist and load kernel sessions from persistent storage.
+    """ KernelSessionManager is used to persist and load kernel sessions from persistent storage.
 
         KernelSessionManager provides the basis for an HA solution.  It loads the complete set of persisted kernel
         sessions during construction.  Following construction the parent object calls start_sessions to allow
@@ -42,13 +51,38 @@ class KernelSessionManager(LoggingConfigurable):
         return bool(os.getenv(self.session_persistence_env,
                               str(self.session_persistence_default_value)).lower() == 'true')
 
+    session_persistence_class = Type(
+        default_value=FileContentsManager,
+        klass=ContentsManager,
+        config=True,
+        help="""The session persistence manager class to use."""
+    )
+
     def __init__(self, kernel_manager, **kwargs):
         super(KernelSessionManager, self).__init__(**kwargs)
         self.kernel_manager = kernel_manager
         self._sessions = dict()
         self._sessionsByUser = dict()
+
         if self.enable_persistence:
-            self.kernel_session_file = os.path.join(self._get_sessions_loc(), 'kernels.json')
+            # A bit of a hack to get around the fact that FileContentsManager wants to place things
+            # under the notebook_dir or cwd, while we'd rather use jupyter_data_dir (or wherever user
+            # specifies).  The reason we can't set root_dir via the FileContentsManager configuration
+            # is because that could side-affect installations where FileContentsManager is also being
+            # used by the notebook server.
+            if self.session_persistence_class.__name__ == FileContentsManager.__name__:
+                kwargs['root_dir'] = kernel_session_root  # this location must exist
+
+            self.persistence_manager = self.session_persistence_class(**kwargs)
+
+            # Create the kernel_sessions "directory", if not present.  Then load the sessions.
+            if not self.persistence_manager.dir_exists(KERNEL_SESSIONS_DIR_NAME):
+                # Commits the sessions dictionary to persistent store.  Caller is responsible for single-threading call.
+                model = dict()
+                model['type'] = 'directory'
+                model['format'] = 'text'
+                self.persistence_manager.save(model=model, path=KERNEL_SESSIONS_DIR_NAME)
+
             self._load_sessions()
 
     def create_session(self, kernel_id, **kwargs):
@@ -111,12 +145,13 @@ class KernelSessionManager(LoggingConfigurable):
 
     def _load_sessions(self):
         if self.enable_persistence:
-            # Read directory/table and initialize _sessions member.  Must be called from constructor.
-            if os.path.exists(self.kernel_session_file):
-                self.log.debug("Loading saved sessions from {}".format(self.kernel_session_file))
-                with open(self.kernel_session_file) as fp:
-                    self._sessions = self._post_load_transformation(json.load(fp))
-                    fp.close()
+            # Read directory and initialize _sessions member.  Must be called from constructor.
+            dir_model = self.persistence_manager.get(KERNEL_SESSIONS_DIR_NAME)
+            for f in dir_model['content']:
+                if f['path'] == KERNEL_SESSIONS_PATH_NAME:
+                    file_model = self.persistence_manager.get(f['path'], format=CM_FORMAT_TEXT)
+                    if file_model['content']:
+                        self._sessions = self._post_load_transformation(json.loads(file_model['content']))
 
     def start_sessions(self):
         """ Attempt to start persisted sessions.
@@ -179,9 +214,11 @@ class KernelSessionManager(LoggingConfigurable):
     def _commit_sessions(self):
         if self.enable_persistence:
             # Commits the sessions dictionary to persistent store.  Caller is responsible for single-threading call.
-            with open(self.kernel_session_file, 'w') as fp:
-                json.dump(self._pre_save_transformation(self._sessions), fp)
-                fp.close()
+            model = dict()
+            model['type'] = 'file'
+            model['content'] = json.dumps(self._pre_save_transformation(self._sessions))
+            model['format'] = 'text'
+            self.persistence_manager.save(model=model, path=KERNEL_SESSIONS_PATH_NAME)
 
     @staticmethod
     def _pre_save_transformation(sessions):
@@ -206,13 +243,6 @@ class KernelSessionManager(LoggingConfigurable):
                     info['key'] = str_to_bytes(key)
 
         return sessions_copy
-
-    def _get_sessions_loc(self):
-        path = os.path.join(kernel_session_location, 'sessions')
-        if not os.path.exists(path):
-            os.makedirs(path, 0o755)
-        self.log.info("Kernel session persistence location: {}".format(path))
-        return path
 
     def active_sessions(self, username):
         """ Returns the number of active sessions for the given username.
