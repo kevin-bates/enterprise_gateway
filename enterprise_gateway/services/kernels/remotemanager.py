@@ -279,8 +279,8 @@ class RemoteKernelManager(EnterpriseGatewayConfigMixin, IOLoopKernelManager):
                            "port_range",
                            "impersonation_enabled",
                            "max_kernels_per_user",
-                           "env_whitelist",
-                           "env_process_whitelist",
+                           "allowed_client_envs",
+                           "allowed_process_envs",
                            "yarn_endpoint",
                            "alt_yarn_endpoint",
                            "yarn_endpoint_security_enabled",
@@ -306,15 +306,15 @@ class RemoteKernelManager(EnterpriseGatewayConfigMixin, IOLoopKernelManager):
 
     def _capture_user_overrides(self, **kwargs):
         """
-           Make a copy of any whitelist or KERNEL_ env values provided by user.  These will be injected
+           Make a copy of any allowed or KERNEL_ env values provided by user.  These will be injected
            back into the env after the kernelspec env has been applied.  This enables defaulting behavior
            of the kernelspec env stanza that would have otherwise overridden the user-provided values.
         """
         env = kwargs.get('env', {})
         self.user_overrides.update({key: value for key, value in env.items()
                                     if key.startswith('KERNEL_') or
-                                    key in self.env_process_whitelist or
-                                    key in self.env_whitelist})
+                                    key in self.allowed_process_envs or
+                                    key in self.allowed_client_envs})
 
     def format_kernel_cmd(self, extra_arguments=None):
         """ Replace templated args (e.g. {response_address}, {port_range}, or {kernel_id}). """

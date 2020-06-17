@@ -25,14 +25,15 @@ export EG_LOG_LEVEL=${EG_LOG_LEVEL:-DEBUG}
 export EG_CULL_IDLE_TIMEOUT=${EG_CULL_IDLE_TIMEOUT:-43200}  # default to 12 hours
 export EG_CULL_INTERVAL=${EG_CULL_INTERVAL:-60}
 export EG_CULL_CONNECTED=${EG_CULL_CONNECTED:-False}
-export EG_KERNEL_WHITELIST=${EG_KERNEL_WHITELIST:-"['r_docker','python_docker','python_tf_docker','scala_docker','spark_r_docker','spark_python_docker','spark_scala_docker']"}
+export EG_ALLOWED_KERNELS=${EG_ALLOWED_KERNELS:-${EG_KERNEL_WHITELIST}}  # provide B/C behavior
+export EG_ALLOWED_KERNELS=${EG_ALLOWED_KERNELS:-"['r_docker','python_docker','python_tf_docker','scala_docker','spark_r_docker','spark_python_docker','spark_scala_docker']"}
 
 
 echo "Starting Jupyter Enterprise Gateway..."
 
 exec jupyter enterprisegateway \
 	--log-level=${EG_LOG_LEVEL} \
-	--KernelSpecManager.whitelist=${EG_KERNEL_WHITELIST} \
+	--KernelSpecManager.whitelist=${EG_ALLOWED_KERNELS} \
 	--MappingKernelManager.cull_idle_timeout=${EG_CULL_IDLE_TIMEOUT} \
 	--MappingKernelManager.cull_interval=${EG_CULL_INTERVAL} \
 	--MappingKernelManager.cull_connected=${EG_CULL_CONNECTED}

@@ -23,7 +23,7 @@ kernel:
   # Timeout for an idle kernel before its culled in seconds. Default is 1 hour.
   cullIdleTimeout: 3600
   # List of kernel names that are available for use.
-  whitelist:
+  allowedKernels:
     - r_kubernetes
     - python_kubernetes
     - python_tf_kubernetes

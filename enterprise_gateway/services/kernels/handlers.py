@@ -21,12 +21,12 @@ class MainKernelHandler(TokenAuthorizationMixin,
     """
 
     @property
-    def env_whitelist(self):
-        return self.settings['eg_env_whitelist']
+    def allowed_client_envs(self):
+        return self.settings['eg_allowed_client_envs']
 
     @property
-    def env_process_whitelist(self):
-        return self.settings['eg_env_process_whitelist']
+    def allowed_process_envs(self):
+        return self.settings['eg_allowed_process_envs']
 
     @gen.coroutine
     def post(self):
@@ -58,12 +58,12 @@ class MainKernelHandler(TokenAuthorizationMixin,
             # Start with the PATH from the current env. Do not provide the entire environment
             # which might contain server secrets that should not be passed to kernels.
             env = {'PATH': os.getenv('PATH', '')}
-            # Whitelist environment variables from current process environment
+            # Filter environment variables from current process environment based on allowed list
             env.update({key: value for key, value in os.environ.items()
-                        if key in self.env_process_whitelist})
-            # Whitelist KERNEL_* args and those allowed by configuration from client
+                        if key in self.allowed_process_envs})
+            # Filter KERNEL_* args and those allowed by configuration from client
             env.update({key: value for key, value in model['env'].items()
-                        if key.startswith('KERNEL_') or key in self.env_whitelist})
+                        if key.startswith('KERNEL_') or key in self.allowed_client_envs})
             # No way to override the call to start_kernel on the kernel manager
             # so do a temporary partial (ugh)
             orig_start = self.kernel_manager.start_kernel

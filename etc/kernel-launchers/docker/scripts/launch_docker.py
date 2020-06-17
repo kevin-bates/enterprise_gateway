@@ -37,7 +37,7 @@ def launch_docker_kernel(kernel_id, response_addr, spark_context_init_mode):
     param_env['EG_RESPONSE_ADDRESS'] = response_addr
     param_env['KERNEL_SPARK_CONTEXT_INIT_MODE'] = spark_context_init_mode
 
-    # Since the environment is specific to the kernel (per env stanza of kernelspec, KERNEL_ and ENV_WHITELIST)
+    # Since the environment is specific to the kernel (per env stanza of kernelspec, KERNEL_ and ALLOWED_CLIENT_ENVS)
     # just add the env here.
     param_env.update(os.environ)
     param_env.pop('PATH')  # Let the image PATH be used.  Since this is relative to images, we're probably safe.

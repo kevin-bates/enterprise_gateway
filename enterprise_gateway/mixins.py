@@ -297,23 +297,39 @@ class EnterpriseGatewayConfigMixin(Configurable):
     def list_kernels_default(self):
         return os.getenv(self.list_kernels_env, os.getenv('KG_LIST_KERNELS', 'False')).lower() == 'true'
 
-    env_whitelist_env = 'EG_ENV_WHITELIST'
     env_whitelist = List(config=True,
-                         help="""Environment variables allowed to be set when a client requests a
-                         new kernel. (EG_ENV_WHITELIST env var)""")
+                         help="""DEPRECATED, use allowed_envs.""")
 
-    @default('env_whitelist')
-    def env_whitelist_default(self):
-        return os.getenv(self.env_whitelist_env, os.getenv('KG_ENV_WHITELIST', '')).split(',')
+    @observe('env_whitelist')
+    def _update_env_whitelist(self, change):
+        self.log.warning("env_whitelist is deprecated, use allowed_client_envs")
+        self.allowed_client_envs = change['new']
 
-    env_process_whitelist_env = 'EG_ENV_PROCESS_WHITELIST'
+    allowed_client_envs_env = 'EG_ALLOWED_CLIENT_ENVS'
+    allowed_client_envs = List(config=True,
+                               help="""Environment variables allowed to be set when a client requests a
+                               new kernel. (EG_ALLOWED_CLIENT_ENVS env var)""")
+
+    @default('allowed_client_envs')
+    def allowed_client_envs_default(self):
+        return os.getenv(self.allowed_client_envs_env, os.getenv('EG_ENV_WHITELIST', '')).split(',')
+
     env_process_whitelist = List(config=True,
-                                 help="""Environment variables allowed to be inherited
-                                 from the spawning process by the kernel. (EG_ENV_PROCESS_WHITELIST env var)""")
+                                 help="""DEPRECATED, use allowed_process_envs""")
 
-    @default('env_process_whitelist')
-    def env_process_whitelist_default(self):
-        return os.getenv(self.env_process_whitelist_env, os.getenv('KG_ENV_PROCESS_WHITELIST', '')).split(',')
+    @observe('env_process_whitelist')
+    def _update_env_process_whitelist(self, change):
+        self.log.warning("env_process_whitelist is deprecated, use allowed_process_envs")
+        self.allowed_process_envs = change['new']
+
+    allowed_process_envs_env = 'EG_ALLOWED_PROCESS_ENVS'
+    allowed_process_envs = List(config=True,
+                                help="""Environment variables allowed to be inherited
+                                from the spawning process by the kernel. (EG_ENV_PROCESS_WHITELIST env var)""")
+
+    @default('allowed_process_envs')
+    def allowed_process_envs_default(self):
+        return os.getenv(self.allowed_process_envs_env, os.getenv('EG_ENV_PROCESS_WHITELIST', '')).split(',')
 
     # Remote hosts
     remote_hosts_env = 'EG_REMOTE_HOSTS'
